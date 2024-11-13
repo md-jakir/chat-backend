@@ -1,0 +1,35 @@
+# name: remote ssh command
+# on:
+#   workflow_dispatch
+#   # push:
+#   #   branches: [main]
+
+# jobs:
+#   deploy:
+#     name: deploy
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       - uses: actions/checkout@v2
+
+#       - name: Create .env file
+#         uses: DamianReeves/write-file-action@v1.0
+#         with:
+#           path: ./.env
+#           contents: |
+#             echo "${{ secrets.ENV_DATA }}"
+#             write-mode: overwrite
+
+#       - name: executing remote ssh commands using password
+#         uses: appleboy/ssh-action@v0.1.10
+#         with:
+#           host: ${{ secrets.SSH_HOST }}
+#           username: ${{ secrets.SSH_USERNAME }}
+#           key: ${{ secrets.SSH_KEY }}
+#           port: 22
+#           script: |
+#             cd ..
+#             cd rifatjahanazad/apps/chatbot-boilerplate/chatbot_boilerplate
+#             sudo git pull origin main
+#             docker compose down
+#             docker compose up -d --build
