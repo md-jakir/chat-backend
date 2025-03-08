@@ -1,35 +1,123 @@
-# name: remote ssh command
-# on:
-#   workflow_dispatch
-#   # push:
-#   #   branches: [main]
+name: CI - Chatbot Admin Dashboard pipeline
 
-# jobs:
-#   deploy:
-#     name: deploy
+on:
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - devops
+  # pull_request:
+  #   branches:
+  #     - main
+env:
+  ACTIONS_RUNNER_DEBUG: true
+  AWS_REGION: ap-southeast-1
+  AWS_ACCOUNT_ID: 212945523191
+  AWS_ECR_REPO: 212945523191.dkr.ecr.ap-southeast-1.amazonaws.com/chatbot-app/backend
+  IMAGE_TAG: latest
+
+permissions:
+  id-token: write
+  contents: write
+  security-events: write
+  actions: read
+  pull-requests: write 
+
+jobs:
+#   CodeScan:
+#     name: gitleaks
 #     runs-on: ubuntu-latest
-
 #     steps:
-#       - uses: actions/checkout@v2
-
-#       - name: Create .env file
-#         uses: DamianReeves/write-file-action@v1.0
+#       - uses: actions/checkout@v4
 #         with:
-#           path: ./.env
-#           contents: |
-#             echo "${{ secrets.ENV_DATA }}"
-#             write-mode: overwrite
+#           fetch-depth: 0
+#           ref: devops
+#       - uses: gitleaks/gitleaks-action@v2
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-#       - name: executing remote ssh commands using password
-#         uses: appleboy/ssh-action@v0.1.10
+  Build:
+    #needs: CodeScan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4 # More information on this action can be found below in the 'AWS Credentials' section
+        with:
+          #role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/github-oidc-role
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push docker image to Amazon ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: chatbot-app/backend
+          #IMAGE_TAG: ${{ github.sha }}
+          #IMAGE_TAG: ${{ github.run_number }}
+          IMAGE_TAG: latest
+        run: |
+          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+      - name: Generate imagedefinitions.json
+        run: |
+          IMAGE_TAG=latest
+          echo '[{"name": "chatbot-admin-dashboar", "imageUri": "212945523191.dkr.ecr.ap-southeast-1.amazonaws.com/chatbot-app/backend:'"$IMAGE_TAG"'"}]' > imagedefinitions.json
+  
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref_name }}
+
+      - name: Upload imagedefinitions.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagedefinitions
+          path: imagedefinitions.json
+
+  Scan:
+    needs: [Build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{secrets.AWS_ACCOUNT_ID}}.dkr.ecr.${{secrets.AWS_REGION}}.amazonaws.com/chatbot-app/backend:$IMAGE_TAG'
+          format: 'table'
+          #exit-code: '1' #By pass and continue if vulnerabilities found (Not recommended, testing complete devSecOps pipeline)
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+#   Deploy:
+#     runs-on: ubuntu-latest
+#     environment: Staging
+#     needs: [Scan]
+#     steps:
+#       - name: Set up kubectl
+#         uses: azure/setup-kubectl@v3
 #         with:
-#           host: ${{ secrets.SSH_HOST }}
-#           username: ${{ secrets.SSH_USERNAME }}
-#           key: ${{ secrets.SSH_KEY }}
-#           port: 22
-#           script: |
-#             cd ..
-#             cd rifatjahanazad/apps/chatbot-boilerplate/chatbot_boilerplate
-#             sudo git pull origin main
-#             docker compose down
-#             docker compose up -d --build
+#             version: 'v1.24.0'
+#       - name: Update kubeconfig
+#         run: aws eks update-kubeconfig --name ${{ secrets.CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+
+
+      # - name: Upload imagedefinitions.json to S3
+      #   run: |
+      #     aws s3 cp imagedefinitions.json s3://codepipeline-eu-north-1-742759316953/ai-competency-chatbo/imagedefinitions.json
+
+    #   - name: Trigger CodePipeline
+    #     env:
+    #       AWS_REGION: eu-north-1
+    #     run: |
+    #       aws codepipeline start-pipeline-execution --name ai-competency-chatbot-admin-dashboard-v1
